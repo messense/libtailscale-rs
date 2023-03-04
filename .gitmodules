@@ -1,0 +1,3 @@
+[submodule "libtailscale-sys/libtailscale"]
+	path = libtailscale-sys/libtailscale
+	url = https://github.com/tailscale/libtailscale.git
