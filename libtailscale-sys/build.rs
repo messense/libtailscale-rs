@@ -14,6 +14,12 @@ fn main() {
     let target = env::var("TARGET").unwrap();
 
     let mut cmd = Command::new("go");
+
+    if std::env::var("DOCS_RS").is_ok() {
+        // Avoid permission deinied error on docs.rs
+        cmd.env("GOMODCACHE", out_dir.join("gomodcache"));
+    }
+
     if host != target {
         let os = if target.contains("android") {
             "android"
