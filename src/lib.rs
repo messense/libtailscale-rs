@@ -182,6 +182,26 @@ impl Tailscale {
         }
     }
 
+    /// Start a LocalAPI listener on a loopback address, and returns the address
+    /// and password credential string for the instance.
+    pub fn loopback_api(&mut self) -> Result<(String, String), String> {
+        let mut addr = [0; 1024];
+        let mut cred = [0; 33];
+        let ret = unsafe {
+            tailscale_loopback_api(self.inner, addr.as_mut_ptr(), addr.len(), cred.as_mut_ptr())
+        };
+        if ret != 0 {
+            Err(self.last_error())
+        } else {
+            let addr = unsafe { CStr::from_ptr(addr.as_ptr()) };
+            let cred = unsafe { CStr::from_ptr(cred.as_ptr()) };
+            Ok((
+                addr.to_str().unwrap().to_owned(),
+                cred.to_str().unwrap().to_owned(),
+            ))
+        }
+    }
+
     fn last_error(&self) -> String {
         let mut buffer = [0; 256];
         unsafe {
