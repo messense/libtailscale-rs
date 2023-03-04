@@ -82,8 +82,9 @@ fn main() {
         } else {
             panic!("unsupported cpu architecture")
         };
-        cmd.env("GOOS", os);
-        cmd.env("GOARCH", arch);
+        cmd.env("CGO_ENABLED", "1")
+            .env("GOOS", os)
+            .env("GOARCH", arch);
     }
 
     let status = cmd
