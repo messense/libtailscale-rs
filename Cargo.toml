@@ -9,3 +9,4 @@ edition = "2021"
 members = [".", "libtailscale-sys"]
 
 [dependencies]
+libtailscale-sys = { path = "libtailscale-sys", version = "0.1.0" }
