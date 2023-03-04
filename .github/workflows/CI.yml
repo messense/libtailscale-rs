@@ -12,16 +12,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: 'recursive'
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo check
-
   test:
     name: Test Suite
     runs-on: ${{ matrix.os }}
