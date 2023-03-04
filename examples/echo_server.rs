@@ -1,5 +1,5 @@
 //! To build and run it:
-//! 
+//!
 //! ```bash
 //! TS_AUTHKEY=<your-auth-key> cargo run --example echo_server
 //! ```
