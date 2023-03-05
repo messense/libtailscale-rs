@@ -102,6 +102,16 @@ fn main() {
             .env("GOOS", os)
             .env("GOARCH", arch);
 
+        if target.contains("armv7") {
+            cmd.env("GOARM", "7");
+        } else if target.contains("armv5") {
+            cmd.env("GOARM", "5");
+        } else if target.contains("arm-") {
+            cmd.env("GOARM", "6");
+        } else if target.contains("i386") || target.contains("i586") {
+            cmd.env("GO386", "softfloat");
+        }
+
         let mut build = cc::Build::new();
         build
             // Suppress cargo metadata for example env vars printing
