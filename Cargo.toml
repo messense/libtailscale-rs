@@ -14,7 +14,7 @@ repository = "https://github.com/messense/libtailscale-rs"
 members = [".", "libtailscale-sys"]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 
 [dependencies]
-libtailscale-sys = { path = "libtailscale-sys", version = "0.1.2" }
+libtailscale-sys = { path = "libtailscale-sys", version = "0.1.3" }
