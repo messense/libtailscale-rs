@@ -17,6 +17,7 @@ cargo add libtailscale
 ## Examples
 
 * [echo server](./examples/echo_server.rs)
+* [echo client](./examples/echo_client.rs)
 
 ## License
 
