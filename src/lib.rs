@@ -206,8 +206,9 @@ impl Tailscale {
 
     fn last_error(&self) -> String {
         let mut buffer = [0; 256];
-        unsafe {
-            tailscale_errmsg(self.inner, buffer.as_mut_ptr(), buffer.len() as _);
+        let ret = unsafe { tailscale_errmsg(self.inner, buffer.as_mut_ptr(), buffer.len() as _) };
+        if ret != 0 {
+            return "tailscale internal error: failed to get error message".to_string();
         }
         let cstr = unsafe { CStr::from_ptr(buffer.as_ptr()) };
         cstr.to_string_lossy().into_owned()
