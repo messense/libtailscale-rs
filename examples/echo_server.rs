@@ -12,7 +12,7 @@ fn main() {
     ts.set_ephemeral(true).unwrap();
     ts.up().unwrap();
 
-    let mut listener = ts.listen("tcp", ":1999").unwrap();
+    let listener = ts.listen("tcp", ":1999").unwrap();
     loop {
         let mut stream = listener.accept().unwrap();
         let mut buf = [0; 2048];

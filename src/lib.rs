@@ -119,8 +119,10 @@ impl Tailscale {
         }
     }
 
-    /// Instruct the tailscale instance to write logs to fd
-    pub unsafe fn set_logfd(&mut self, logfd: c_int) -> Result<(), String> {
+    /// Instruct the tailscale instance to write logs to `logfd`
+    ///
+    /// An `logfd` value of `-1` means discard all logging.
+    pub fn set_logfd(&mut self, logfd: c_int) -> Result<(), String> {
         let ret = unsafe { tailscale_set_logfd(self.inner, logfd) };
         if ret != 0 {
             Err(self.last_error())
@@ -226,7 +228,7 @@ impl Default for Tailscale {
 
 impl<'a> Listener<'a> {
     /// Accept a connection on a Tailscale [`Listener`].
-    pub fn accept(&mut self) -> Result<TcpStream, String> {
+    pub fn accept(&self) -> Result<TcpStream, String> {
         let mut conn = 0;
         let ret = unsafe { tailscale_accept(self.listener, &mut conn) };
         if ret != 0 {
