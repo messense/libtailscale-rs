@@ -1,6 +1,6 @@
 [package]
 name = "libtailscale"
-version = "0.1.1"
+version.workspace = true
 edition = "2021"
 description = "Rust binding to libtailscale"
 keywords = ["tailscale"]
@@ -13,5 +13,8 @@ repository = "https://github.com/messense/libtailscale-rs"
 [workspace]
 members = [".", "libtailscale-sys"]
 
+[workspace.package]
+version = "0.1.2"
+
 [dependencies]
-libtailscale-sys = { path = "libtailscale-sys", version = "0.1.1" }
+libtailscale-sys = { path = "libtailscale-sys", version = "0.1.2" }

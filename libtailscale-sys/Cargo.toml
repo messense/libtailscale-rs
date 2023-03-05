@@ -1,6 +1,6 @@
 [package]
 name = "libtailscale-sys"
-version = "0.1.1"
+version.workspace = true
 edition = "2021"
 description = "Rust FFI to libtailscale C API"
 keywords = ["tailscale"]
