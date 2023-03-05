@@ -30,10 +30,16 @@ fn main() {
     ts.up().unwrap();
 
     let listener = ts.listen("tcp", ":1999").unwrap();
-    loop {
-        let stream = listener.accept().unwrap();
-        thread::spawn(move || {
-            handle_client(stream);
-        });
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                thread::spawn(move || {
+                    handle_client(stream);
+                });
+            }
+            Err(e) => {
+                println!("Error: {}", e);
+            }
+        }
     }
 }

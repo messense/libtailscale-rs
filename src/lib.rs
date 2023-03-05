@@ -1,4 +1,5 @@
 use std::ffi::{CStr, CString};
+use std::iter::FusedIterator;
 use std::net::TcpStream;
 use std::os::fd::FromRawFd;
 use std::os::raw::c_int;
@@ -239,6 +240,15 @@ impl<'a> Listener<'a> {
         }
     }
 
+    /// Returns an iterator over the connections being received on this
+    /// listener.
+    ///
+    /// The returned iterator will never return [`None`]. Iterating over it is equivalent to
+    /// calling [`Listener::accept`] in a loop.
+    pub fn incoming(&self) -> Incoming<'_> {
+        Incoming { listener: self }
+    }
+
     /// Close the listener.
     pub fn close(&mut self) -> Result<(), String> {
         let ret = unsafe { tailscale_listener_close(self.listener) };
@@ -255,3 +265,19 @@ impl<'a> Drop for Listener<'a> {
         let _ret = self.close();
     }
 }
+
+/// An iterator that infinitely accepts connections on a [`Listener`].
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+#[derive(Debug)]
+pub struct Incoming<'a> {
+    listener: &'a Listener<'a>,
+}
+
+impl<'a> Iterator for Incoming<'a> {
+    type Item = Result<TcpStream, String>;
+    fn next(&mut self) -> Option<Result<TcpStream, String>> {
+        Some(self.listener.accept())
+    }
+}
+
+impl FusedIterator for Incoming<'_> {}
