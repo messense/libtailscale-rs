@@ -98,6 +98,7 @@ fn main() {
         } else {
             panic!("unsupported cpu architecture")
         };
+        println!("GOOS={os} GOARCH={arch}");
         cmd.env("CGO_ENABLED", "1")
             .env("GOOS", os)
             .env("GOARCH", arch);
@@ -129,7 +130,7 @@ fn main() {
     }
 
     let status = cmd
-        .args(["build", "-buildmode=c-archive", "-o"])
+        .args(["build", "-x", "-buildmode=c-archive", "-o"])
         .arg(out_dir.join("libtailscale.a"))
         .current_dir("libtailscale")
         .status()
