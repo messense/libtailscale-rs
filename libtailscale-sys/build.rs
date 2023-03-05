@@ -1,6 +1,16 @@
 use std::env;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
+
+fn format_compiler_command(tool: Command) -> OsString {
+    let mut cmd = tool.get_program().to_os_string();
+    for arg in tool.get_args() {
+        cmd.push(" ");
+        cmd.push(arg);
+    }
+    cmd
+}
 
 fn main() {
     println!("cargo:rerun-if-changed=libtailscale/tailscale.h");
@@ -91,6 +101,21 @@ fn main() {
         cmd.env("CGO_ENABLED", "1")
             .env("GOOS", os)
             .env("GOARCH", arch);
+
+        let mut build = cc::Build::new();
+        build
+            // Suppress cargo metadata for example env vars printing
+            .cargo_metadata(false)
+            // opt_level, host and target are required
+            .opt_level(0)
+            .host(&host)
+            .target(&target);
+        let c_compiler = build.get_compiler();
+        cmd.env("CC", format_compiler_command(c_compiler.to_command()));
+
+        build.cpp(true);
+        let cxx_compiler = build.get_compiler();
+        cmd.env("CXX", format_compiler_command(cxx_compiler.to_command()));
     }
 
     let status = cmd
