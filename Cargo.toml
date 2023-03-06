@@ -14,10 +14,10 @@ repository = "https://github.com/messense/libtailscale-rs"
 members = [".", "libtailscale-sys"]
 
 [workspace.package]
-version = "0.1.5"
+version = "0.1.6"
 
 [dependencies]
-libtailscale-sys = { path = "libtailscale-sys", version = "0.1.5" }
+libtailscale-sys = { path = "libtailscale-sys", version = "0.1.6" }
 
 [dev-dependencies]
 bytes = "1.4.0"

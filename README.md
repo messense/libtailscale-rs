@@ -14,6 +14,11 @@ Add it to your ``Cargo.toml``:
 cargo add libtailscale
 ```
 
+### Build Requirements
+
+* Rust
+* Go 1.20+
+
 ## Examples
 
 * [echo server](./examples/echo_server.rs)
