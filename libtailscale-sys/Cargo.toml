@@ -5,6 +5,7 @@ edition = "2021"
 description = "Rust FFI to libtailscale C API"
 keywords = ["tailscale"]
 license = "MIT"
+links = "tailscale"
 repository = "https://github.com/messense/libtailscale-rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
