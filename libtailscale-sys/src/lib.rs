@@ -75,11 +75,12 @@ extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
-    pub fn tailscale_loopback_api(
+    pub fn tailscale_loopback(
         sd: tailscale,
         addr_out: *mut ::std::os::raw::c_char,
         addrlen: usize,
-        cred_out: *mut ::std::os::raw::c_char,
+        proxy_cred_out: *mut ::std::os::raw::c_char,
+        local_api_cred_out: *mut ::std::os::raw::c_char,
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {

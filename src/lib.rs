@@ -186,22 +186,32 @@ impl Tailscale {
     }
 
     /// Start a LocalAPI listener on a loopback address, and returns the address
-    /// and password credential string for the instance.
-    pub fn loopback_api(&mut self) -> Result<(String, String), String> {
+    // and credentials for using it as LocalAPI or a proxy.
+    pub fn loopback(&mut self) -> Result<Loopback, String> {
         let mut addr = [0; 1024];
         let mut cred = [0; 33];
+        let mut proxy_cred = [0; 33];
         let ret = unsafe {
-            tailscale_loopback_api(self.inner, addr.as_mut_ptr(), addr.len(), cred.as_mut_ptr())
+            tailscale_loopback(
+                self.inner,
+                addr.as_mut_ptr(),
+                addr.len(),
+                proxy_cred.as_mut_ptr(),
+                cred.as_mut_ptr(),
+            )
         };
         if ret != 0 {
             Err(self.last_error())
         } else {
             let addr = unsafe { CStr::from_ptr(addr.as_ptr()) };
             let cred = unsafe { CStr::from_ptr(cred.as_ptr()) };
-            Ok((
-                addr.to_str().unwrap().to_owned(),
-                cred.to_str().unwrap().to_owned(),
-            ))
+            let proxy_cred = unsafe { CStr::from_ptr(proxy_cred.as_ptr()) };
+            Ok(Loopback {
+                address: addr.to_str().unwrap().to_owned(),
+                credential: cred.to_str().unwrap().to_owned(),
+                proxy_username: "tsnet",
+                proxy_credential: proxy_cred.to_str().unwrap().to_owned(),
+            })
         }
     }
 
@@ -226,6 +236,19 @@ impl Default for Tailscale {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Tailscale loopback API information.
+#[derive(Debug, Clone)]
+pub struct Loopback {
+    /// `ip:port` address of the LocalAPI
+    pub address: String,
+    /// Basic auth password
+    pub credential: String,
+    /// Proxy username, it's always `tsnet`
+    pub proxy_username: &'static str,
+    /// Proxy auth password
+    pub proxy_credential: String,
 }
 
 impl<'a> Listener<'a> {

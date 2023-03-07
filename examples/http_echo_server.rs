@@ -52,6 +52,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     ts.set_logfd(-1).unwrap();
     ts.up().unwrap();
 
+    let loopback = ts.loopback().unwrap();
+    println!(
+        "Loopback API: {}, credential: {}",
+        loopback.address, loopback.credential
+    );
+    println!(
+        "Proxy username: {}, credential: {}",
+        loopback.proxy_username, loopback.proxy_credential
+    );
+    println!();
+
     let listener = ts.listen("tcp", ":3000").unwrap();
     println!("Listening on http://echo-http-server:3000");
     for stream in listener.incoming() {
