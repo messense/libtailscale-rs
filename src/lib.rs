@@ -54,7 +54,7 @@ impl Tailscale {
     }
 
     /// Shut down the server
-    pub fn close(&mut self) -> Result<(), ()> {
+    fn close(&mut self) -> Result<(), ()> {
         let ret = unsafe { tailscale_close(self.inner) };
         if ret != 0 {
             Err(())
@@ -273,7 +273,7 @@ impl<'a> Listener<'a> {
     }
 
     /// Close the listener.
-    pub fn close(&mut self) -> Result<(), String> {
+    fn close(&mut self) -> Result<(), String> {
         let ret = unsafe { tailscale_listener_close(self.listener) };
         if ret != 0 {
             Err(self.tailscale.last_error())
