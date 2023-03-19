@@ -17,6 +17,7 @@ members = [".", "libtailscale-sys"]
 version = "0.2.0"
 
 [dependencies]
+libc = "0.2.140"
 libtailscale-sys = { path = "libtailscale-sys", version = "0.2.0" }
 
 [dev-dependencies]

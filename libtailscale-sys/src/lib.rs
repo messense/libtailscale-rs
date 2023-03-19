@@ -66,9 +66,6 @@ extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
-    pub fn tailscale_listener_close(listener: tailscale_listener) -> ::std::os::raw::c_int;
-}
-extern "C" {
     pub fn tailscale_accept(
         listener: tailscale_listener,
         conn_out: *mut tailscale_conn,

@@ -274,7 +274,7 @@ impl<'a> Listener<'a> {
 
     /// Close the listener.
     fn close(&mut self) -> Result<(), String> {
-        let ret = unsafe { tailscale_listener_close(self.listener) };
+        let ret = unsafe { libc::close(self.listener) };
         if ret != 0 {
             Err(self.tailscale.last_error())
         } else {
