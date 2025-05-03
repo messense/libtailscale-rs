@@ -81,6 +81,12 @@ extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
+    pub fn tailscale_enable_funnel_to_localhost_plaintext_http1(
+        sd: tailscale,
+        localhost_port: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
     pub fn tailscale_errmsg(
         sd: tailscale,
         buf: *mut ::std::os::raw::c_char,

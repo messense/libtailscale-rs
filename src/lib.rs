@@ -186,7 +186,7 @@ impl Tailscale {
     }
 
     /// Start a LocalAPI listener on a loopback address, and returns the address
-    // and credentials for using it as LocalAPI or a proxy.
+    /// and credentials for using it as LocalAPI or a proxy.
     pub fn loopback(&mut self) -> Result<Loopback, String> {
         let mut addr = [0; 1024];
         let mut cred = [0; 33];
@@ -212,6 +212,29 @@ impl Tailscale {
                 proxy_username: "tsnet",
                 proxy_credential: proxy_cred.to_str().unwrap().to_owned(),
             })
+        }
+    }
+
+    /// Configures it to have Tailscale Funnel enabled, routing requests from the public web
+    /// (without any authentication) down to this Tailscale node, requesting new
+    /// LetsEncrypt TLS certs as needed, terminating TLS, and proxying all incoming
+    /// HTTPS requests to `http://127.0.0.1:localhost_port` without TLS.
+    ///
+    /// There should be a plaintext HTTP/1 server listening on `127.0.0.1:localhost_port`
+    /// or tsnet will serve HTTP 502 errors.
+    ///
+    /// Expect junk traffic from the internet from bots watching the public CT logs.
+    pub fn enable_funnel_to_localhost_plaintext_http1(
+        &self,
+        localhost_port: u16,
+    ) -> Result<(), String> {
+        let ret = unsafe {
+            tailscale_enable_funnel_to_localhost_plaintext_http1(self.inner, localhost_port as _)
+        };
+        if ret != 0 {
+            Err(self.last_error())
+        } else {
+            Ok(())
         }
     }
 
