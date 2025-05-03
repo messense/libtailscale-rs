@@ -8,6 +8,7 @@ use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
 use libtailscale::Tailscale;
 
 /// This is our service handler. It receives a Request, routes on its
@@ -72,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 let stream = tokio::net::TcpStream::from_std(stream)?;
                 tokio::task::spawn(async move {
                     if let Err(err) = http1::Builder::new()
-                        .serve_connection(stream, service_fn(echo))
+                        .serve_connection(TokioIo::new(stream), service_fn(echo))
                         .await
                     {
                         println!("Error serving connection: {:?}", err);
