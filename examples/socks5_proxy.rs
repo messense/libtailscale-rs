@@ -207,28 +207,151 @@ fn copy_stream(mut reader: TcpStream, mut writer: TcpStream) {
 // -- LocalAPI integration for exit node configuration --
 
 fn set_exit_node(loopback: &libtailscale::Loopback, exit_node: &str, allow_lan: bool) {
+    // If exit_node looks like an IP, use it directly; otherwise resolve the
+    // hostname to an IP via the LocalAPI status endpoint.
+    let exit_node_ip = if exit_node.parse::<std::net::IpAddr>().is_ok() {
+        exit_node.to_string()
+    } else {
+        resolve_exit_node(loopback, exit_node)
+    };
+
     let body = format!(
         r#"{{"ExitNodeIP":"{}","ExitNodeAllowLANAccess":{},"ExitNodeIPSet":true,"ExitNodeAllowLANAccessSet":true}}"#,
-        exit_node, allow_lan
+        exit_node_ip, allow_lan
     );
 
+    let response = localapi_request(loopback, "PATCH", "/localapi/v0/prefs", Some(&body));
+    if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
+        let status_line = response.lines().next().unwrap_or("(empty response)");
+        eprintln!("[fatal] Failed to set exit node: {}", status_line);
+        if let Some(body_start) = response.find("\r\n\r\n") {
+            eprintln!("[fatal] Response: {}", &response[body_start + 4..]);
+        }
+        process::exit(1);
+    }
+}
+
+/// Resolve an exit node hostname to its Tailscale IP by querying the LocalAPI
+/// status endpoint. Accepts a bare hostname (e.g. "dmit-messense-01") or a
+/// full DNS name (e.g. "dmit-messense-01.saga-toad.ts.net").
+fn resolve_exit_node(loopback: &libtailscale::Loopback, name: &str) -> String {
+    let response = localapi_request(loopback, "GET", "/localapi/v0/status", None);
+
+    let body = match response.find("\r\n\r\n") {
+        Some(pos) => &response[pos + 4..],
+        None => {
+            eprintln!("[fatal] Malformed response from LocalAPI status");
+            process::exit(1);
+        }
+    };
+
+    // Minimal JSON parsing: find the peer whose DNSName or HostName matches,
+    // then extract its first TailscaleIPs entry.
+    let name_lower = name.to_lowercase();
+    let name_lower = name_lower.trim_end_matches('.');
+
+    // We do simple string scanning to avoid pulling in a JSON dependency.
+    let mut search_pos = 0;
+    while let Some(dns_idx) = body[search_pos..].find("\"DNSName\"") {
+        let abs_dns_idx = search_pos + dns_idx;
+
+        // Extract DNSName value
+        let dns_name = extract_json_string(body, abs_dns_idx).unwrap_or_default();
+        let dns_name_lower = dns_name.to_lowercase();
+        let dns_name_trimmed = dns_name_lower.trim_end_matches('.');
+
+        // Look at a surrounding chunk for HostName and TailscaleIPs
+        let chunk_start = abs_dns_idx.saturating_sub(200);
+        let chunk_end = (abs_dns_idx + 500).min(body.len());
+        let chunk = &body[chunk_start..chunk_end];
+
+        let host_name = chunk
+            .find("\"HostName\"")
+            .and_then(|i| extract_json_string(chunk, i))
+            .unwrap_or_default()
+            .to_lowercase();
+
+        let matched = dns_name_trimmed == name_lower
+            || dns_name_trimmed.starts_with(&format!("{}.", name_lower))
+            || host_name == name_lower;
+
+        if matched {
+            if let Some(ip) = chunk
+                .find("\"TailscaleIPs\"")
+                .and_then(|i| extract_json_array_first(chunk, i))
+            {
+                eprintln!("[info] Resolved exit node '{}' -> {}", name, ip);
+                return ip;
+            }
+        }
+
+        search_pos = abs_dns_idx + 10;
+    }
+
+    eprintln!(
+        "[fatal] Could not find exit node '{}' in tailnet peers. Available peers:",
+        name
+    );
+    let mut pos = 0;
+    while let Some(idx) = body[pos..].find("\"DNSName\"") {
+        let abs = pos + idx;
+        if let Some(dns) = extract_json_string(body, abs) {
+            eprintln!("  - {}", dns.trim_end_matches('.'));
+        }
+        pos = abs + 10;
+    }
+    process::exit(1);
+}
+
+/// Extract a JSON string value from `"Key":"value"` starting at the key position.
+fn extract_json_string(s: &str, key_pos: usize) -> Option<String> {
+    let after_key = &s[key_pos..];
+    let colon = after_key.find(':')?;
+    let after_colon = &after_key[colon + 1..];
+    let quote_start = after_colon.find('"')?;
+    let value_start = quote_start + 1;
+    let quote_end = after_colon[value_start..].find('"')?;
+    Some(after_colon[value_start..value_start + quote_end].to_string())
+}
+
+/// Extract the first string element from a JSON array like `"Key":["value1","value2"]`.
+fn extract_json_array_first(s: &str, key_pos: usize) -> Option<String> {
+    let after_key = &s[key_pos..];
+    let bracket = after_key.find('[')?;
+    let after_bracket = &after_key[bracket + 1..];
+    let quote_start = after_bracket.find('"')?;
+    let value_start = quote_start + 1;
+    let quote_end = after_bracket[value_start..].find('"')?;
+    Some(after_bracket[value_start..value_start + quote_end].to_string())
+}
+
+/// Make an HTTP request to the LocalAPI.
+fn localapi_request(
+    loopback: &libtailscale::Loopback,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+) -> String {
     let auth = base64_encode(&format!("tsnet:{}", loopback.credential));
+    let content_len = body.map_or(0, |b| b.len());
 
-    let request = format!(
-        "PATCH /localapi/v0/prefs HTTP/1.1\r\n\
+    let mut request = format!(
+        "{method} {path} HTTP/1.1\r\n\
          Host: {}\r\n\
-         Authorization: Basic {}\r\n\
-         Sec-Tailscale: localapi\r\n\
-         Content-Type: application/json\r\n\
-         Content-Length: {}\r\n\
-         Connection: close\r\n\
-         \r\n\
-         {}",
+         Authorization: Basic {auth}\r\n\
+         Sec-Tailscale: localapi\r\n",
         loopback.address,
-        auth,
-        body.len(),
-        body
     );
+    if body.is_some() {
+        request.push_str(&format!(
+            "Content-Type: application/json\r\n\
+             Content-Length: {content_len}\r\n"
+        ));
+    }
+    request.push_str("Connection: close\r\n\r\n");
+    if let Some(b) = body {
+        request.push_str(b);
+    }
 
     let mut stream = TcpStream::connect(&loopback.address).unwrap_or_else(|e| {
         eprintln!(
@@ -241,15 +364,7 @@ fn set_exit_node(loopback: &libtailscale::Loopback, exit_node: &str, allow_lan: 
 
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
-
-    if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
-        let status_line = response.lines().next().unwrap_or("(empty response)");
-        eprintln!("[fatal] Failed to set exit node: {}", status_line);
-        if let Some(body_start) = response.find("\r\n\r\n") {
-            eprintln!("[fatal] Response: {}", &response[body_start + 4..]);
-        }
-        process::exit(1);
-    }
+    response
 }
 
 /// Minimal base64 encoder (no external dependency needed)
@@ -318,7 +433,7 @@ fn parse_args() -> Args {
                 eprintln!(
                     "Usage: socks5_proxy [OPTIONS]\n\n\
                      Options:\n  \
-                       --exit-node <IP>    Exit node IP or MagicDNS name (required)\n  \
+                       --exit-node <NODE>  Exit node IP, hostname, or FQDN (required)\n  \
                        --listen <ADDR>     SOCKS5 listen address (default: 127.0.0.1:1080)\n  \
                        --hostname <NAME>   Tailscale hostname (default: auto)\n  \
                        --allow-lan         Allow LAN access when using exit node\n\n\
