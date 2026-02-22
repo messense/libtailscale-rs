@@ -1,6 +1,6 @@
 use std::ffi::{CStr, CString};
 use std::iter::FusedIterator;
-use std::net::TcpStream;
+use std::net::{IpAddr, TcpStream};
 use std::os::fd::FromRawFd;
 use std::os::raw::c_int;
 
@@ -129,6 +129,27 @@ impl Tailscale {
             Err(self.last_error())
         } else {
             Ok(())
+        }
+    }
+
+    /// Returns the IP addresses of the Tailscale server.
+    ///
+    /// The result is typically an IPv4 and an IPv6 address, but may be empty
+    /// or contain any number of addresses.
+    pub fn get_ips(&self) -> Result<Vec<IpAddr>, String> {
+        let mut buf = [0i8; 1024];
+        let ret = unsafe { tailscale_getips(self.inner, buf.as_mut_ptr(), buf.len()) };
+        if ret != 0 {
+            Err(self.last_error())
+        } else {
+            let cstr = unsafe { CStr::from_ptr(buf.as_ptr()) };
+            let s = cstr.to_str().map_err(|e| e.to_string())?;
+            if s.is_empty() {
+                return Ok(Vec::new());
+            }
+            s.split(',')
+                .map(|ip| ip.parse::<IpAddr>().map_err(|e| e.to_string()))
+                .collect()
         }
     }
 
@@ -284,6 +305,37 @@ impl<'a> Listener<'a> {
         } else {
             Ok(unsafe { TcpStream::from_raw_fd(conn) })
         }
+    }
+
+    /// Returns the remote address for an incoming connection.
+    ///
+    /// The `conn` should be a raw file descriptor obtained from [`Listener::accept_raw`]
+    /// or the raw fd of a `TcpStream` returned by [`Listener::accept`].
+    pub fn get_remote_addr(&self, conn: tailscale_conn) -> Result<IpAddr, String> {
+        let mut buf = [0i8; 256];
+        let ret = unsafe {
+            tailscale_getremoteaddr(self.listener, conn, buf.as_mut_ptr(), buf.len())
+        };
+        if ret != 0 {
+            Err(self.tailscale.last_error())
+        } else {
+            let cstr = unsafe { CStr::from_ptr(buf.as_ptr()) };
+            let s = cstr.to_str().map_err(|e| e.to_string())?;
+            s.parse::<IpAddr>().map_err(|e| e.to_string())
+        }
+    }
+
+    /// Accept a connection on a Tailscale [`Listener`], returning the raw
+    /// file descriptor and the remote address.
+    pub fn accept_with_addr(&self) -> Result<(TcpStream, IpAddr), String> {
+        let mut conn = 0;
+        let ret = unsafe { tailscale_accept(self.listener, &mut conn) };
+        if ret != 0 {
+            return Err(self.tailscale.last_error());
+        }
+        let addr = self.get_remote_addr(conn)?;
+        let stream = unsafe { TcpStream::from_raw_fd(conn) };
+        Ok((stream, addr))
     }
 
     /// Returns an iterator over the connections being received on this

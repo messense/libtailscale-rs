@@ -66,9 +66,24 @@ extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
+    pub fn tailscale_getips(
+        sd: tailscale,
+        buf: *mut ::std::os::raw::c_char,
+        buflen: usize,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
     pub fn tailscale_accept(
         listener: tailscale_listener,
         conn_out: *mut tailscale_conn,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn tailscale_getremoteaddr(
+        l: tailscale_listener,
+        conn: tailscale_conn,
+        buf: *mut ::std::os::raw::c_char,
+        buflen: usize,
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
