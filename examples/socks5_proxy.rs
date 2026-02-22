@@ -19,15 +19,17 @@
 //! ```
 
 use std::env;
-use std::io::{self, Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::io;
+use std::net::Ipv6Addr;
 use std::process;
 use std::sync::Arc;
-use std::thread;
 
 use libtailscale::Tailscale;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = parse_args();
 
     eprintln!("[info] Starting tailscale node...");
@@ -36,7 +38,6 @@ fn main() {
     if let Some(ref hostname) = args.hostname {
         ts.set_hostname(hostname).unwrap();
     }
-    // Disable logging by default (fd = -1)
     ts.set_logfd(-1).unwrap();
     ts.up().unwrap();
 
@@ -47,24 +48,24 @@ fn main() {
     let loopback = ts.loopback().unwrap();
     eprintln!("[info] LocalAPI at {}", loopback.address);
 
-    set_exit_node(&loopback, &args.exit_node, args.allow_lan);
+    set_exit_node(&loopback, &args.exit_node, args.allow_lan).await;
     eprintln!("[info] Exit node set to: {}", args.exit_node);
 
     let ts = Arc::new(ts);
 
     // Start SOCKS5 proxy on local address
-    let listener = TcpListener::bind(&args.listen).unwrap_or_else(|e| {
+    let listener = TcpListener::bind(&args.listen).await.unwrap_or_else(|e| {
         eprintln!("[fatal] Failed to bind {}: {}", args.listen, e);
         process::exit(1);
     });
     eprintln!("[info] SOCKS5 proxy listening on socks5://{}", args.listen);
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(client) => {
+    loop {
+        match listener.accept().await {
+            Ok((client, _)) => {
                 let ts = Arc::clone(&ts);
-                thread::spawn(move || {
-                    if let Err(e) = handle_socks5(client, &ts) {
+                tokio::spawn(async move {
+                    if let Err(e) = handle_socks5(client, ts).await {
                         eprintln!("[error] {}", e);
                     }
                 });
@@ -76,31 +77,29 @@ fn main() {
 
 // -- SOCKS5 implementation (no-auth, CONNECT only) --
 
-fn handle_socks5(mut client: TcpStream, ts: &Tailscale) -> io::Result<()> {
+async fn handle_socks5(mut client: TcpStream, ts: Arc<Tailscale>) -> io::Result<()> {
     // 1. Greeting
     let mut buf = [0u8; 258];
-    client.read_exact(&mut buf[..2])?;
+    client.read_exact(&mut buf[..2]).await?;
     if buf[0] != 0x05 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "not SOCKS5"));
     }
     let nmethods = buf[1] as usize;
-    client.read_exact(&mut buf[..nmethods])?;
+    client.read_exact(&mut buf[..nmethods]).await?;
 
-    // We only support no-auth (0x00)
     if !buf[..nmethods].contains(&0x00) {
-        client.write_all(&[0x05, 0xFF])?; // no acceptable methods
+        client.write_all(&[0x05, 0xFF]).await?;
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "no supported auth method",
         ));
     }
-    client.write_all(&[0x05, 0x00])?; // no auth required
+    client.write_all(&[0x05, 0x00]).await?;
 
     // 2. Request
-    client.read_exact(&mut buf[..4])?;
+    client.read_exact(&mut buf[..4]).await?;
     if buf[0] != 0x05 || buf[1] != 0x01 {
-        // Only CONNECT (0x01) is supported
-        send_socks5_reply(&mut client, 0x07)?; // command not supported
+        send_socks5_reply(&mut client, 0x07).await?;
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "only CONNECT supported",
@@ -110,30 +109,30 @@ fn handle_socks5(mut client: TcpStream, ts: &Tailscale) -> io::Result<()> {
     let addr = match buf[3] {
         0x01 => {
             // IPv4
-            client.read_exact(&mut buf[..4])?;
+            client.read_exact(&mut buf[..4]).await?;
             let ip = format!("{}.{}.{}.{}", buf[0], buf[1], buf[2], buf[3]);
-            let port = read_port(&mut client)?;
-            format!("{}:{}", ip, port)
+            let port = read_port(&mut client).await?;
+            format!("{ip}:{port}")
         }
         0x03 => {
             // Domain name
-            client.read_exact(&mut buf[..1])?;
+            client.read_exact(&mut buf[..1]).await?;
             let len = buf[0] as usize;
-            client.read_exact(&mut buf[..len])?;
+            client.read_exact(&mut buf[..len]).await?;
             let domain = String::from_utf8_lossy(&buf[..len]).to_string();
-            let port = read_port(&mut client)?;
-            format!("{}:{}", domain, port)
+            let port = read_port(&mut client).await?;
+            format!("{domain}:{port}")
         }
         0x04 => {
             // IPv6
             let mut ipv6_buf = [0u8; 16];
-            client.read_exact(&mut ipv6_buf)?;
-            let ip = std::net::Ipv6Addr::from(ipv6_buf);
-            let port = read_port(&mut client)?;
-            format!("[{}]:{}", ip, port)
+            client.read_exact(&mut ipv6_buf).await?;
+            let ip = Ipv6Addr::from(ipv6_buf);
+            let port = read_port(&mut client).await?;
+            format!("[{ip}]:{port}")
         }
         _ => {
-            send_socks5_reply(&mut client, 0x08)?; // address type not supported
+            send_socks5_reply(&mut client, 0x08).await?;
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "unsupported address type",
@@ -141,126 +140,83 @@ fn handle_socks5(mut client: TcpStream, ts: &Tailscale) -> io::Result<()> {
         }
     };
 
-    // 3. Connect via Tailscale (routed through exit node)
-    let remote = match ts.dial("tcp", &addr) {
-        Ok(stream) => stream,
-        Err(e) => {
-            send_socks5_reply(&mut client, 0x05)?; // connection refused
-            return Err(io::Error::new(
+    // 3. Connect via Tailscale (blocking dial in spawn_blocking)
+    let ts_clone = Arc::clone(&ts);
+    let addr_clone = addr.clone();
+    let std_stream = tokio::task::spawn_blocking(move || ts_clone.dial("tcp", &addr_clone))
+        .await
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+        .map_err(|e| {
+            io::Error::new(
                 io::ErrorKind::ConnectionRefused,
-                format!("dial {}: {}", addr, e),
-            ));
-        }
-    };
+                format!("dial {addr}: {e}"),
+            )
+        })?;
+
+    std_stream.set_nonblocking(true)?;
+    let mut remote = TcpStream::from_std(std_stream)?;
 
     // 4. Send success reply
-    send_socks5_reply(&mut client, 0x00)?;
+    send_socks5_reply(&mut client, 0x00).await?;
 
     // 5. Relay data bidirectionally
-    relay(client, remote);
+    let _ = tokio::io::copy_bidirectional(&mut client, &mut remote).await;
     Ok(())
 }
 
-fn read_port(stream: &mut TcpStream) -> io::Result<u16> {
+async fn read_port(stream: &mut TcpStream) -> io::Result<u16> {
     let mut buf = [0u8; 2];
-    stream.read_exact(&mut buf)?;
+    stream.read_exact(&mut buf).await?;
     Ok(u16::from_be_bytes(buf))
 }
 
-fn send_socks5_reply(client: &mut TcpStream, status: u8) -> io::Result<()> {
-    // +----+-----+-------+------+----------+----------+
-    // |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
-    // +----+-----+-------+------+----------+----------+
-    client.write_all(&[
-        0x05, status, 0x00, 0x01, // SOCKS5, status, reserved, IPv4
-        0, 0, 0, 0, // BND.ADDR = 0.0.0.0
-        0, 0, // BND.PORT = 0
-    ])
-}
-
-fn relay(client: TcpStream, remote: TcpStream) {
-    let client2 = client.try_clone().unwrap();
-    let remote2 = remote.try_clone().unwrap();
-
-    let t1 = thread::spawn(move || copy_stream(client, remote));
-    let t2 = thread::spawn(move || copy_stream(remote2, client2));
-
-    let _ = t1.join();
-    let _ = t2.join();
-}
-
-fn copy_stream(mut reader: TcpStream, mut writer: TcpStream) {
-    let mut buf = [0u8; 8192];
-    loop {
-        match reader.read(&mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                if writer.write_all(&buf[..n]).is_err() {
-                    break;
-                }
-            }
-        }
-    }
-    let _ = writer.shutdown(Shutdown::Write);
+async fn send_socks5_reply(client: &mut TcpStream, status: u8) -> io::Result<()> {
+    client
+        .write_all(&[
+            0x05, status, 0x00, 0x01, // SOCKS5, status, reserved, IPv4
+            0, 0, 0, 0, // BND.ADDR = 0.0.0.0
+            0, 0, // BND.PORT = 0
+        ])
+        .await
 }
 
 // -- LocalAPI integration for exit node configuration --
 
-fn set_exit_node(loopback: &libtailscale::Loopback, exit_node: &str, allow_lan: bool) {
-    // If exit_node looks like an IP, use it directly; otherwise resolve the
-    // hostname to an IP via the LocalAPI status endpoint.
+async fn set_exit_node(loopback: &libtailscale::Loopback, exit_node: &str, allow_lan: bool) {
     let exit_node_ip = if exit_node.parse::<std::net::IpAddr>().is_ok() {
         exit_node.to_string()
     } else {
-        resolve_exit_node(loopback, exit_node)
+        resolve_exit_node(loopback, exit_node).await
     };
 
     let body = format!(
-        r#"{{"ExitNodeIP":"{}","ExitNodeAllowLANAccess":{},"ExitNodeIPSet":true,"ExitNodeAllowLANAccessSet":true}}"#,
-        exit_node_ip, allow_lan
+        r#"{{"ExitNodeIP":"{exit_node_ip}","ExitNodeAllowLANAccess":{allow_lan},"ExitNodeIPSet":true,"ExitNodeAllowLANAccessSet":true}}"#,
     );
 
-    let response = localapi_request(loopback, "PATCH", "/localapi/v0/prefs", Some(&body));
-    if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
-        let status_line = response.lines().next().unwrap_or("(empty response)");
-        eprintln!("[fatal] Failed to set exit node: {}", status_line);
-        if let Some(body_start) = response.find("\r\n\r\n") {
-            eprintln!("[fatal] Response: {}", &response[body_start + 4..]);
-        }
+    let response = localapi_request(loopback, "PATCH", "/localapi/v0/prefs", Some(&body)).await;
+    let (status_line, resp_body) = parse_http_response(&response);
+    if !status_line.contains("200") {
+        eprintln!("[fatal] Failed to set exit node: {status_line}");
+        eprintln!("[fatal] Response: {resp_body}");
         process::exit(1);
     }
 }
 
-/// Resolve an exit node hostname to its Tailscale IP by querying the LocalAPI
-/// status endpoint. Accepts a bare hostname (e.g. "dmit-messense-01") or a
-/// full DNS name (e.g. "dmit-messense-01.saga-toad.ts.net").
-fn resolve_exit_node(loopback: &libtailscale::Loopback, name: &str) -> String {
-    let response = localapi_request(loopback, "GET", "/localapi/v0/status", None);
+async fn resolve_exit_node(loopback: &libtailscale::Loopback, name: &str) -> String {
+    let response = localapi_request(loopback, "GET", "/localapi/v0/status", None).await;
+    let (_status, body) = parse_http_response(&response);
 
-    let body = match response.find("\r\n\r\n") {
-        Some(pos) => &response[pos + 4..],
-        None => {
-            eprintln!("[fatal] Malformed response from LocalAPI status");
-            process::exit(1);
-        }
-    };
-
-    // Minimal JSON parsing: find the peer whose DNSName or HostName matches,
-    // then extract its first TailscaleIPs entry.
     let name_lower = name.to_lowercase();
     let name_lower = name_lower.trim_end_matches('.');
 
-    // We do simple string scanning to avoid pulling in a JSON dependency.
     let mut search_pos = 0;
     while let Some(dns_idx) = body[search_pos..].find("\"DNSName\"") {
         let abs_dns_idx = search_pos + dns_idx;
 
-        // Extract DNSName value
         let dns_name = extract_json_string(body, abs_dns_idx).unwrap_or_default();
         let dns_name_lower = dns_name.to_lowercase();
         let dns_name_trimmed = dns_name_lower.trim_end_matches('.');
 
-        // Look at a surrounding chunk for HostName and TailscaleIPs
         let chunk_start = abs_dns_idx.saturating_sub(200);
         let chunk_end = (abs_dns_idx + 500).min(body.len());
         let chunk = &body[chunk_start..chunk_end];
@@ -272,7 +228,7 @@ fn resolve_exit_node(loopback: &libtailscale::Loopback, name: &str) -> String {
             .to_lowercase();
 
         let matched = dns_name_trimmed == name_lower
-            || dns_name_trimmed.starts_with(&format!("{}.", name_lower))
+            || dns_name_trimmed.starts_with(&format!("{name_lower}."))
             || host_name == name_lower;
 
         if matched {
@@ -280,7 +236,7 @@ fn resolve_exit_node(loopback: &libtailscale::Loopback, name: &str) -> String {
                 .find("\"TailscaleIPs\"")
                 .and_then(|i| extract_json_array_first(chunk, i))
             {
-                eprintln!("[info] Resolved exit node '{}' -> {}", name, ip);
+                eprintln!("[info] Resolved exit node '{name}' -> {ip}");
                 return ip;
             }
         }
@@ -288,10 +244,7 @@ fn resolve_exit_node(loopback: &libtailscale::Loopback, name: &str) -> String {
         search_pos = abs_dns_idx + 10;
     }
 
-    eprintln!(
-        "[fatal] Could not find exit node '{}' in tailnet peers. Available peers:",
-        name
-    );
+    eprintln!("[fatal] Could not find exit node '{name}' in tailnet peers. Available peers:");
     let mut pos = 0;
     while let Some(idx) = body[pos..].find("\"DNSName\"") {
         let abs = pos + idx;
@@ -303,7 +256,6 @@ fn resolve_exit_node(loopback: &libtailscale::Loopback, name: &str) -> String {
     process::exit(1);
 }
 
-/// Extract a JSON string value from `"Key":"value"` starting at the key position.
 fn extract_json_string(s: &str, key_pos: usize) -> Option<String> {
     let after_key = &s[key_pos..];
     let colon = after_key.find(':')?;
@@ -314,7 +266,6 @@ fn extract_json_string(s: &str, key_pos: usize) -> Option<String> {
     Some(after_colon[value_start..value_start + quote_end].to_string())
 }
 
-/// Extract the first string element from a JSON array like `"Key":["value1","value2"]`.
 fn extract_json_array_first(s: &str, key_pos: usize) -> Option<String> {
     let after_key = &s[key_pos..];
     let bracket = after_key.find('[')?;
@@ -325,15 +276,23 @@ fn extract_json_array_first(s: &str, key_pos: usize) -> Option<String> {
     Some(after_bracket[value_start..value_start + quote_end].to_string())
 }
 
-/// Make an HTTP request to the LocalAPI.
-fn localapi_request(
+fn parse_http_response(response: &str) -> (&str, &str) {
+    let status_line = response.lines().next().unwrap_or("");
+    let body = response
+        .find("\r\n\r\n")
+        .map(|pos| &response[pos + 4..])
+        .unwrap_or("");
+    (status_line, body)
+}
+
+/// Make an HTTP request to the LocalAPI using tokio TcpStream.
+async fn localapi_request(
     loopback: &libtailscale::Loopback,
     method: &str,
     path: &str,
     body: Option<&str>,
 ) -> String {
     let auth = base64_encode(&format!("tsnet:{}", loopback.credential));
-    let content_len = body.map_or(0, |b| b.len());
 
     let mut request = format!(
         "{method} {path} HTTP/1.1\r\n\
@@ -342,10 +301,11 @@ fn localapi_request(
          Sec-Tailscale: localapi\r\n",
         loopback.address,
     );
-    if body.is_some() {
+    if let Some(b) = body {
         request.push_str(&format!(
             "Content-Type: application/json\r\n\
-             Content-Length: {content_len}\r\n"
+             Content-Length: {}\r\n",
+            b.len()
         ));
     }
     request.push_str("Connection: close\r\n\r\n");
@@ -353,21 +313,23 @@ fn localapi_request(
         request.push_str(b);
     }
 
-    let mut stream = TcpStream::connect(&loopback.address).unwrap_or_else(|e| {
-        eprintln!(
-            "[fatal] Failed to connect to LocalAPI at {}: {}",
-            loopback.address, e
-        );
-        process::exit(1);
-    });
-    stream.write_all(request.as_bytes()).unwrap();
+    let mut stream = TcpStream::connect(&loopback.address)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!(
+                "[fatal] Failed to connect to LocalAPI at {}: {e}",
+                loopback.address,
+            );
+            process::exit(1);
+        });
+    stream.write_all(request.as_bytes()).await.unwrap();
 
     let mut response = String::new();
-    stream.read_to_string(&mut response).unwrap();
+    stream.read_to_string(&mut response).await.unwrap();
     response
 }
 
-/// Minimal base64 encoder (no external dependency needed)
+/// Minimal base64 encoder (no external dependency needed).
 fn base64_encode(input: &str) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let bytes = input.as_bytes();
@@ -443,7 +405,7 @@ fn parse_args() -> Args {
                 process::exit(0);
             }
             other => {
-                eprintln!("Unknown argument: {}", other);
+                eprintln!("Unknown argument: {other}");
                 process::exit(1);
             }
         }
