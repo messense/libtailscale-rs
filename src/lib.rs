@@ -313,9 +313,8 @@ impl<'a> Listener<'a> {
     /// or the raw fd of a `TcpStream` returned by [`Listener::accept`].
     pub fn get_remote_addr(&self, conn: tailscale_conn) -> Result<IpAddr, String> {
         let mut buf = [0i8; 256];
-        let ret = unsafe {
-            tailscale_getremoteaddr(self.listener, conn, buf.as_mut_ptr(), buf.len())
-        };
+        let ret =
+            unsafe { tailscale_getremoteaddr(self.listener, conn, buf.as_mut_ptr(), buf.len()) };
         if ret != 0 {
             Err(self.tailscale.last_error())
         } else {
