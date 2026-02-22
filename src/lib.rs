@@ -12,6 +12,12 @@ pub struct Tailscale {
     inner: tailscale,
 }
 
+// SAFETY: The underlying libtailscale C library stores servers in a global Go
+// map protected by a mutex. All exported C functions are safe to call
+// concurrently from multiple threads.
+unsafe impl Send for Tailscale {}
+unsafe impl Sync for Tailscale {}
+
 /// A socket on the tailnet listening for connections.
 #[derive(Debug)]
 pub struct Listener<'a> {
