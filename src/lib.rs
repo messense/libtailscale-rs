@@ -163,7 +163,7 @@ impl Tailscale {
     /// * `address` is a string of an IP address or domain name.
     ///
     /// It will start the server if it has not been started yet.
-    pub fn listen(&self, network: &str, address: &str) -> Result<Listener, String> {
+    pub fn listen(&self, network: &str, address: &str) -> Result<Listener<'_>, String> {
         let c_network = CString::new(network).unwrap();
         let c_address = CString::new(address).unwrap();
         let mut listener = 0;
